@@ -12,9 +12,15 @@
     <div id="mainMenu" class="screen active">
         <div class="menu-container">
             <h1 class="game-title">🏎️ ARABA YARIŞI</h1>
-            <div class="gold-display-main">
-                <span class="gold-icon">💰</span>
-                <span id="mainGoldDisplay">0</span>
+            <div class="currency-display-main">
+                <div class="currency-item">
+                    <span class="currency-icon">💰</span>
+                    <span id="mainGoldDisplay">0</span>
+                </div>
+                <div class="currency-item">
+                    <span class="currency-icon">🪙</span>
+                    <span id="mainSilverDisplay">0</span>
+                </div>
             </div>
             <button class="menu-btn" id="startBtn">OYUNU BAŞLAT</button>
             <button class="menu-btn" id="galleryBtn">GALERİ</button>
@@ -63,6 +69,37 @@
         </div>
     </div>
 
+    <!-- Oyun Başlangıç Ekranı -->
+    <div id="gameStartScreen" class="screen">
+        <div class="menu-container">
+            <h2 class="menu-title">OYUN BİLGİLERİ</h2>
+            <div class="game-info-container">
+                <div class="info-row">
+                    <span class="info-label">Araba:</span>
+                    <span id="startCarName">-</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Can:</span>
+                    <span id="startLives">3</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Hız:</span>
+                    <span id="startSpeed">0</span> km/h
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Mevsim:</span>
+                    <span id="startSeason">-</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Yol Tipi:</span>
+                    <span id="startRoadType">-</span>
+                </div>
+            </div>
+            <button class="menu-btn" id="startGameBtn">OYUNU BAŞLAT</button>
+            <button class="menu-btn" id="backFromStartBtn">GERİ DÖN</button>
+        </div>
+    </div>
+
     <!-- Oyun Ekranı -->
     <div id="gameScreen" class="screen">
         <canvas id="gameCanvas"></canvas>
@@ -70,12 +107,16 @@
         <div class="game-ui">
             <div class="stats">
                 <div class="stat-item">
-                    <span class="stat-label">Skor:</span>
-                    <span id="scoreDisplay">0</span>
+                    <span class="stat-label">Mesafe:</span>
+                    <span id="kmDisplay">0 m</span>
                 </div>
                 <div class="stat-item">
                     <span class="stat-label">Altın:</span>
                     <span id="goldDisplay">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Gümüş:</span>
+                    <span id="silverDisplay">0</span>
                 </div>
             <div class="stat-item">
                 <span class="stat-label">Bölüm:</span>
@@ -108,7 +149,8 @@
                 <h2>OYUN BİTTİ!</h2>
                 <div class="game-over-stats">
                     <p>Toplanan Altın: <span id="finalGoldDisplay">0</span> 💰</p>
-                    <p>Toplam Skor: <span id="finalScoreDisplay">0</span></p>
+                    <p>Toplanan Gümüş: <span id="finalSilverDisplay">0</span> 🪙</p>
+                    <p>Toplam Mesafe: <span id="finalKmDisplay">0 m</span></p>
                 </div>
                 <button class="menu-btn" id="restartBtn">TEKRAR OYNA</button>
                 <button class="menu-btn" id="menuFromGameOverBtn">ANA MENÜ</button>
@@ -120,9 +162,15 @@
     <div id="galleryScreen" class="screen">
         <div class="menu-container gallery-container">
             <h2 class="menu-title">🚗 ARABA GALERİSİ</h2>
-            <div class="gold-display-main">
-                <span class="gold-icon">💰</span>
-                <span id="galleryGoldDisplay">0</span>
+            <div class="currency-display-main">
+                <div class="currency-item">
+                    <span class="currency-icon">💰</span>
+                    <span id="galleryGoldDisplay">0</span>
+                </div>
+                <div class="currency-item">
+                    <span class="currency-icon">🪙</span>
+                    <span id="gallerySilverDisplay">0</span>
+                </div>
             </div>
             <div id="carGallery" class="car-gallery">
                 <!-- Arabalar JavaScript ile eklenecek -->

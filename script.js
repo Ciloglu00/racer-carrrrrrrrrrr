@@ -24,14 +24,27 @@ let gameState = {
     screen: 'mainMenu',
     isPlaying: false,
     isPaused: false,
-    score: 0,
-    gold: 0, // Başlangıçta 0, localStorage'dan yüklenecek
+    distance: 0, // Metre cinsinden mesafe
+    gold: 0, // Oyun içi altın
+    silver: 0, // Oyun içi gümüş
     level: 1,
     speed: 2,
     soundEnabled: true,
     lives: 3,
-    totalGold: 0 // Toplam birikmiş altın
+    totalGold: 0, // Toplam birikmiş altın
+    totalSilver: 0 // Toplam birikmiş gümüş
 };
+
+// Yol Sistemi - Virajlar ve Kavşaklar
+let roadCurve = 0; // Yolun eğriliği (-1 ile 1 arası)
+let roadCurveTarget = 0; // Hedef eğrilik
+let roadCurveSpeed = 0.001; // Eğrilik değişim hızı
+let roadSegments = []; // Yol segmentleri
+let barriers = []; // Dubalar
+let lastBarrierY = -100;
+
+// Ses Sistemi
+let crashSound = null;
 
 // Oyun Ayarları
 let settings = {
@@ -124,6 +137,7 @@ function togglePause() {
 // LocalStorage Yönetimi
 function saveGameData() {
     localStorage.setItem('racerGold', gameState.totalGold.toString());
+    localStorage.setItem('racerSilver', gameState.totalSilver.toString());
     localStorage.setItem('racerOwnedCars', JSON.stringify(ownedCars));
     localStorage.setItem('racerSelectedCar', settings.carType);
 }
@@ -132,6 +146,11 @@ function loadGameData() {
     const savedGold = localStorage.getItem('racerGold');
     if (savedGold) {
         gameState.totalGold = parseInt(savedGold) || 0;
+    }
+    
+    const savedSilver = localStorage.getItem('racerSilver');
+    if (savedSilver) {
+        gameState.totalSilver = parseInt(savedSilver) || 0;
     }
     
     const savedCars = localStorage.getItem('racerOwnedCars');
@@ -145,6 +164,35 @@ function loadGameData() {
     }
     
     updatePlayerCar();
+}
+
+// Çarpışma Sesi Oluştur
+function createCrashSound() {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    
+    oscillator.frequency.value = 150;
+    oscillator.type = 'sawtooth';
+    
+    gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+    
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.2);
+}
+
+function playCrashSound() {
+    if (gameState.soundEnabled) {
+        try {
+            createCrashSound();
+        } catch (e) {
+            console.log('Ses çalınamadı:', e);
+        }
+    }
 }
 
 // Oyuncu Araba Güncelleme
@@ -164,7 +212,9 @@ function updatePlayerCar() {
 function movePlayer(direction) {
     if (!canvas || !player) return;
     const roadWidth = canvas.width * roadConfigs[settings.roadType].width;
-    const roadX = (canvas.width - roadWidth) / 2;
+    const baseRoadX = (canvas.width - roadWidth) / 2;
+    const curveOffset = roadCurve * (canvas.width * 0.1);
+    const roadX = baseRoadX + curveOffset;
     const minX = roadX + player.width / 2;
     const maxX = roadX + roadWidth - player.width / 2;
     
@@ -180,14 +230,19 @@ function startGame() {
     }
     gameState.isPlaying = true;
     gameState.isPaused = false;
-    gameState.score = 0;
-    gameState.gold = 0; // Oyun içi altın (sadece bu oyun için)
+    gameState.distance = 0;
+    gameState.gold = 0; // Oyun içi altın
+    gameState.silver = 0; // Oyun içi gümüş
     gameState.level = 1;
     gameState.speed = 2;
     gameState.lives = 3;
     enemyCars = [];
     coins = [];
+    barriers = [];
     roadOffset = 0;
+    roadCurve = 0;
+    roadCurveTarget = 0;
+    lastBarrierY = -100;
     player.x = canvas.width / 2;
     player.y = canvas.height - 100;
     player.invulnerable = false;
@@ -201,14 +256,67 @@ function startGame() {
 function endGame() {
     gameState.isPlaying = false;
     gameState.totalGold += gameState.gold; // Toplanan altınları ekle
+    gameState.totalSilver += gameState.silver; // Toplanan gümüşleri ekle
     saveGameData();
     
     document.getElementById('finalGoldDisplay').textContent = gameState.gold;
-    document.getElementById('finalScoreDisplay').textContent = gameState.score;
+    document.getElementById('finalSilverDisplay').textContent = gameState.silver;
+    const distanceText = gameState.distance >= 1000 
+        ? `${(gameState.distance / 1000).toFixed(2)} km`
+        : `${Math.floor(gameState.distance)} m`;
+    document.getElementById('finalKmDisplay').textContent = distanceText;
     document.getElementById('gameOverMenu').classList.remove('hidden');
 }
 
-// Düşman Araba Oluşturma
+// Viraj Sistemi
+function updateRoadCurve() {
+    // Rastgele viraj hedefi belirle
+    if (Math.random() < 0.005) {
+        roadCurveTarget = (Math.random() - 0.5) * 2; // -1 ile 1 arası
+    }
+    
+    // Viraja doğru yavaşça dön
+    if (roadCurve < roadCurveTarget) {
+        roadCurve = Math.min(roadCurve + roadCurveSpeed, roadCurveTarget);
+    } else if (roadCurve > roadCurveTarget) {
+        roadCurve = Math.max(roadCurve - roadCurveSpeed, roadCurveTarget);
+    }
+    
+    // Viraj hedefine ulaşıldıysa yeni hedef belirle
+    if (Math.abs(roadCurve - roadCurveTarget) < 0.01) {
+        roadCurveTarget = (Math.random() - 0.5) * 0.5; // Daha yumuşak geçişler
+    }
+}
+
+// Duba Oluşturma
+function createBarrier(y) {
+    if (!canvas) return;
+    const roadWidth = canvas.width * roadConfigs[settings.roadType].width;
+    const baseRoadX = (canvas.width - roadWidth) / 2;
+    const curveOffset = roadCurve * (canvas.width * 0.1);
+    const roadX = baseRoadX + curveOffset;
+    
+    // Sol ve sağ tarafta dubalar
+    barriers.push({
+        x: roadX - 15,
+        y: y,
+        width: 20,
+        height: 30,
+        side: 'left',
+        baseX: baseRoadX - 15 // Viraj için referans noktası
+    });
+    
+    barriers.push({
+        x: roadX + roadWidth - 5,
+        y: y,
+        width: 20,
+        height: 30,
+        side: 'right',
+        baseX: baseRoadX + roadWidth - 5 // Viraj için referans noktası
+    });
+}
+
+// Düşman Araba Oluşturma (Çarpışma kontrolü ile)
 function createEnemyCar() {
     if (!canvas) return;
     const roadWidth = canvas.width * roadConfigs[settings.roadType].width;
@@ -216,37 +324,83 @@ function createEnemyCar() {
     const lanes = roadConfigs[settings.roadType].lanes;
     const laneWidth = roadWidth / lanes;
     
+    // Viraj etkisi
+    const curveOffset = roadCurve * (canvas.width * 0.1);
+    const adjustedRoadX = roadX + curveOffset;
+    
     const lane = Math.floor(Math.random() * lanes);
-    const x = roadX + (lane + 0.5) * laneWidth;
+    let x = adjustedRoadX + (lane + 0.5) * laneWidth;
     
-    // Rastgele araba tipi seç
-    const carType = enemyCarTypes[Math.floor(Math.random() * enemyCarTypes.length)];
-    const color = carType.colors[Math.floor(Math.random() * carType.colors.length)];
-    
-    enemyCars.push({
-        x: x,
-        y: -150, // Daha yukarıdan başlasın
-        width: carType.width,
-        height: carType.height,
-        speed: gameState.speed + Math.random() * 2,
-        color: color,
-        carType: carType.type,
-        z: 0 // Perspektif için z değeri
-    });
+    // Diğer arabalarla çarpışma kontrolü
+    let attempts = 0;
+    let canPlace = false;
+    while (!canPlace && attempts < 10) {
+        canPlace = true;
+        const newCar = {
+            x: x,
+            y: -150,
+            width: 0,
+            height: 0,
+            speed: 0,
+            color: '',
+            carType: '',
+            z: 0
+        };
+        
+        // Rastgele araba tipi seç
+        const carType = enemyCarTypes[Math.floor(Math.random() * enemyCarTypes.length)];
+        const color = carType.colors[Math.floor(Math.random() * carType.colors.length)];
+        
+        newCar.width = carType.width;
+        newCar.height = carType.height;
+        newCar.speed = gameState.speed + Math.random() * 2;
+        newCar.color = color;
+        newCar.carType = carType.type;
+        
+        // Mevcut arabalarla çarpışma kontrolü
+        for (let i = 0; i < enemyCars.length; i++) {
+            const existingCar = enemyCars[i];
+            // Aynı yükseklikte veya yakın yükseklikte olan arabaları kontrol et
+            if (Math.abs(existingCar.y - newCar.y) < newCar.height + existingCar.height) {
+                const distance = Math.abs(existingCar.x - newCar.x);
+                const minDistance = (newCar.width + existingCar.width) / 2 + 10; // 10px boşluk
+                if (distance < minDistance) {
+                    canPlace = false;
+                    // Farklı bir şerit dene
+                    const newLane = Math.floor(Math.random() * lanes);
+                    x = adjustedRoadX + (newLane + 0.5) * laneWidth;
+                    break;
+                }
+            }
+        }
+        
+        if (canPlace) {
+            enemyCars.push(newCar);
+            break;
+        }
+        
+        attempts++;
+    }
 }
 
-// Altın Oluşturma
+// Altın ve Gümüş Oluşturma
 function createCoin() {
     if (!canvas) return;
     const roadWidth = canvas.width * roadConfigs[settings.roadType].width;
     const roadX = (canvas.width - roadWidth) / 2;
+    const curveOffset = roadCurve * (canvas.width * 0.1);
+    const adjustedRoadX = roadX + curveOffset;
+    
+    // %70 altın, %30 gümüş
+    const isGold = Math.random() < 0.7;
     
     coins.push({
-        x: roadX + Math.random() * roadWidth,
+        x: adjustedRoadX + Math.random() * roadWidth,
         y: -30,
         radius: 15,
         speed: gameState.speed + 1,
-        collected: false
+        collected: false,
+        type: isGold ? 'gold' : 'silver'
     });
 }
 
@@ -267,7 +421,7 @@ function checkCollision(playerObj, carObj) {
     return pLeft < cRight && pRight > cLeft && pTop < cBottom && pBottom > cTop;
 }
 
-// Altın Toplama Tespiti
+// Para Toplama Tespiti
 function checkCoinCollection(coin, player) {
     const dx = coin.x - player.x;
     const dy = coin.y - player.y;
@@ -278,6 +432,12 @@ function checkCoinCollection(coin, player) {
 // Oyun Güncelleme
 function updateGame() {
     if (!gameState.isPlaying || gameState.isPaused || !canvas || !player) return;
+    
+    // Mesafe güncelle (KM sistemi)
+    gameState.distance += gameState.speed * 0.1; // Her frame'de mesafe artışı
+    
+    // Viraj güncelle
+    updateRoadCurve();
     
     // Kontroller
     if (keys['ArrowLeft'] || keys['a'] || keys['A'] || touchLeft) {
@@ -292,9 +452,15 @@ function updateGame() {
         createEnemyCar();
     }
     
-    // Altın oluşturma
+    // Para oluşturma (altın ve gümüş)
     if (Math.random() < 0.01) {
         createCoin();
+    }
+    
+    // Duba oluşturma
+    if (lastBarrierY > 50 || lastBarrierY < -50) {
+        createBarrier(-50);
+        lastBarrierY = -50;
     }
     
     // Invulnerability kontrolü
@@ -309,6 +475,23 @@ function updateGame() {
     roadOffset += gameState.speed * 0.5;
     if (roadOffset > 100) roadOffset = 0;
     
+    // Dubaları güncelle
+    for (let i = barriers.length - 1; i >= 0; i--) {
+        const barrier = barriers[i];
+        barrier.y += gameState.speed + 2;
+        lastBarrierY = barrier.y;
+        
+        // Viraj etkisi
+        const curveOffset = roadCurve * (canvas.width * 0.1) * (barrier.y / canvas.height);
+        if (barrier.baseX !== undefined) {
+            barrier.x = barrier.baseX + curveOffset;
+        }
+        
+        if (barrier.y > canvas.height + 50) {
+            barriers.splice(i, 1);
+        }
+    }
+    
     // Düşman arabaları güncelle
     for (let i = enemyCars.length - 1; i >= 0; i--) {
         const car = enemyCars[i];
@@ -317,8 +500,20 @@ function updateGame() {
         car.y += perspectiveSpeed;
         car.z = (car.y / canvas.height) * 100; // Z değeri perspektif için
         
+        // Viraj etkisi - arabalar viraja göre yatay hareket eder
+        const curveEffect = roadCurve * (canvas.width * 0.1) * (car.y / canvas.height);
+        const baseRoadX = (canvas.width - canvas.width * roadConfigs[settings.roadType].width) / 2;
+        const roadWidth = canvas.width * roadConfigs[settings.roadType].width;
+        const adjustedRoadX = baseRoadX + curveEffect;
+        
+        // Arabanın yol içinde kalmasını sağla
+        const minX = adjustedRoadX + car.width / 2;
+        const maxX = adjustedRoadX + roadWidth - car.width / 2;
+        car.x = Math.max(minX, Math.min(maxX, car.x));
+        
         // Çarpışma kontrolü
         if (checkCollision(player, car)) {
+            playCrashSound();
             gameState.lives--;
             player.invulnerable = true;
             player.invulnerableTime = 60; // 1 saniye invulnerability (60 frame)
@@ -333,10 +528,10 @@ function updateGame() {
             continue;
         }
         
-        // Araba geçme kontrolü (düşman araba player'ın arkasına geçtiğinde)
+        // Araba geçme kontrolü (düşman araba player'ın arkasına geçtiğinde) - 10m ekle
         if (!car.passed && car.y > player.y + player.height) {
             car.passed = true;
-            gameState.score += 10;
+            gameState.distance += 10; // 10 metre ekle
             updateUI();
         }
         
@@ -356,9 +551,13 @@ function updateGame() {
         
         coin.y += coin.speed;
         
-        // Altın toplama kontrolü
+        // Para toplama kontrolü
         if (checkCoinCollection(coin, player)) {
+            if (coin.type === 'gold') {
             gameState.gold += 1;
+            } else {
+                gameState.silver += 1;
+            }
             coin.collected = true;
             coins.splice(i, 1);
             updateUI();
@@ -370,8 +569,8 @@ function updateGame() {
         }
     }
     
-    // Bölüm kontrolü
-    const newLevel = Math.floor(gameState.score / 1000) + 1;
+    // Bölüm kontrolü (her 1000m'de bir seviye artışı)
+    const newLevel = Math.floor(gameState.distance / 1000) + 1;
     if (newLevel > gameState.level) {
         gameState.level = newLevel;
         gameState.speed += 0.5;
@@ -384,20 +583,32 @@ function drawGame() {
     if (!canvas || !ctx || !player) return;
     const colors = seasonColors[settings.season];
     const roadWidth = canvas.width * roadConfigs[settings.roadType].width;
-    const roadX = (canvas.width - roadWidth) / 2;
+    const baseRoadX = (canvas.width - roadWidth) / 2;
     const lanes = roadConfigs[settings.roadType].lanes;
     
-    // Gökyüzü
-    ctx.fillStyle = colors.sky;
+    // Viraj etkisi
+    const curveOffset = roadCurve * (canvas.width * 0.1);
+    const roadX = baseRoadX + curveOffset;
+    
+    // Gökyüzü (gradient)
+    const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    skyGradient.addColorStop(0, colors.sky);
+    skyGradient.addColorStop(1, colors.sky + 'dd');
+    ctx.fillStyle = skyGradient;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    // Çimen
+    // Çimen (virajla birlikte)
     ctx.fillStyle = colors.grass;
     ctx.fillRect(0, 0, roadX, canvas.height);
     ctx.fillRect(roadX + roadWidth, 0, canvas.width - (roadX + roadWidth), canvas.height);
     
-    // Perspektifli yol çizimi
-    drawRoadWithPerspective(roadX, roadWidth, lanes, colors, roadOffset);
+    // Perspektifli yol çizimi (virajlı)
+    drawRoadWithPerspective(roadX, roadWidth, lanes, colors, roadOffset, roadCurve);
+    
+    // Dubalar
+    barriers.forEach(barrier => {
+        drawBarrier(barrier.x, barrier.y, barrier.width, barrier.height, barrier.side);
+    });
     
     // Düşman arabalar (z değerine göre sırala - uzaktakiler önce çizilsin)
     const sortedCars = [...enemyCars].sort((a, b) => b.z - a.z);
@@ -406,11 +617,11 @@ function drawGame() {
         drawAdvancedCar(car.x, car.y, car.width * scale, car.height * scale, car.color, car.carType, scale);
     });
     
-    // Altınlar
+    // Paralar (altın ve gümüş)
     coins.forEach(coin => {
         if (!coin.collected) {
             const scale = 0.5 + (coin.y / canvas.height) * 0.5;
-            drawCoin(coin.x, coin.y, coin.radius * scale);
+            drawCoin(coin.x, coin.y, coin.radius * scale, coin.type);
         }
     });
     
@@ -420,46 +631,92 @@ function drawGame() {
     }
 }
 
-// Perspektifli yol çizimi
-function drawRoadWithPerspective(roadX, roadWidth, lanes, colors, offset) {
-    // Yol
-    ctx.fillStyle = colors.road;
+// Perspektifli yol çizimi (virajlı)
+function drawRoadWithPerspective(roadX, roadWidth, lanes, colors, offset, curve) {
+    // Yol gövdesi (gradient ile daha güzel)
+    const roadGradient = ctx.createLinearGradient(roadX, 0, roadX + roadWidth, 0);
+    roadGradient.addColorStop(0, colors.road);
+    roadGradient.addColorStop(0.5, colors.road + 'aa');
+    roadGradient.addColorStop(1, colors.road);
+    ctx.fillStyle = roadGradient;
     ctx.fillRect(roadX, 0, roadWidth, canvas.height);
     
-    // Perspektif çizgileri
-    ctx.strokeStyle = '#ffd700';
-    ctx.lineWidth = 3;
-    ctx.setLineDash([20, 20]);
-    
-    for (let i = 1; i < lanes; i++) {
-        const lineX = roadX + (roadWidth / lanes) * i;
-        
-        // Perspektif efekti için çizgileri eğ
-        for (let y = 0; y < canvas.height; y += 40) {
-            const perspective = 1 + (y / canvas.height) * 0.3;
-            const startX = lineX - (roadWidth / lanes) * 0.15 * perspective;
-            const endX = lineX + (roadWidth / lanes) * 0.15 * perspective;
-            
-        ctx.beginPath();
-            ctx.moveTo(startX, y);
-            ctx.lineTo(endX, y + 40);
-        ctx.stroke();
-        }
-    }
-    ctx.setLineDash([]);
-    
-    // Orta çizgi (perspektifli)
+    // Yol kenarları (daha belirgin)
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 4;
     ctx.beginPath();
-    const centerX = roadX + roadWidth / 2;
-    const topWidth = roadWidth * 0.3;
-    const bottomWidth = roadWidth * 0.7;
+    ctx.moveTo(roadX, 0);
+    ctx.lineTo(roadX, canvas.height);
+    ctx.moveTo(roadX + roadWidth, 0);
+    ctx.lineTo(roadX + roadWidth, canvas.height);
+    ctx.stroke();
     
-    ctx.moveTo(centerX - topWidth/2, 0);
-    ctx.lineTo(centerX - bottomWidth/2, canvas.height);
-    ctx.moveTo(centerX + topWidth/2, 0);
-    ctx.lineTo(centerX + bottomWidth/2, canvas.height);
+    // Şerit çizgileri (perspektifli ve virajlı)
+    ctx.strokeStyle = '#ffd700';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([30, 20]);
+    
+    for (let i = 1; i < lanes; i++) {
+        const baseLineX = roadX + (roadWidth / lanes) * i;
+        
+        // Perspektif ve viraj efekti
+        ctx.beginPath();
+        for (let y = 0; y <= canvas.height; y += 5) {
+            const perspective = 1 + (y / canvas.height) * 0.4;
+            const curveEffect = curve * (canvas.width * 0.05) * (y / canvas.height);
+            const lineX = baseLineX + curveEffect;
+            
+            if (y === 0) {
+                ctx.moveTo(lineX, y);
+            } else {
+                ctx.lineTo(lineX, y);
+            }
+        }
+        ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    
+    // Orta çizgi (kesikli, perspektifli ve virajlı)
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4;
+    ctx.setLineDash([40, 20]);
+    ctx.beginPath();
+    const centerX = roadX + roadWidth / 2;
+    for (let y = 0; y <= canvas.height; y += 5) {
+        const curveEffect = curve * (canvas.width * 0.05) * (y / canvas.height);
+        const lineX = centerX + curveEffect;
+        
+        if (y === 0) {
+            ctx.moveTo(lineX, y);
+        } else {
+            ctx.lineTo(lineX, y);
+        }
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+}
+
+// Duba Çizimi
+function drawBarrier(x, y, width, height, side) {
+    // Duba gövdesi (turuncu-kırmızı)
+    const gradient = ctx.createLinearGradient(x, y, x + width, y);
+    gradient.addColorStop(0, '#ff6b35');
+    gradient.addColorStop(0.5, '#f7931e');
+    gradient.addColorStop(1, '#ff6b35');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(x, y, width, height);
+    
+    // Duba kenarları
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, width, height);
+    
+    // Duba içi çizgiler
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + width/2, y);
+    ctx.lineTo(x + width/2, y + height);
     ctx.stroke();
 }
 
@@ -653,8 +910,10 @@ function drawCarPreview(previewCtx, x, y, width, height, color, carType) {
     ctx = oldCtx;
 }
 
-// Altın Çizimi
-function drawCoin(x, y, radius) {
+// Para Çizimi (Altın veya Gümüş)
+function drawCoin(x, y, radius, type = 'gold') {
+    if (type === 'gold') {
+        // Altın
     ctx.fillStyle = '#ffd700';
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
@@ -672,20 +931,74 @@ function drawCoin(x, y, radius) {
     
     // $ işareti
     ctx.fillStyle = '#ffaa00';
-    ctx.font = `${radius}px Arial`;
+        ctx.font = `${radius * 0.8}px Arial`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('$', x, y);
+    } else {
+        // Gümüş
+        ctx.fillStyle = '#c0c0c0';
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.strokeStyle = '#808080';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        // Gümüş içi detay
+        ctx.fillStyle = '#e8e8e8';
+        ctx.beginPath();
+        ctx.arc(x, y, radius * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // S işareti (silver)
+        ctx.fillStyle = '#808080';
+        ctx.font = `${radius * 0.8}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('S', x, y);
+    }
 }
 
 // UI Güncelleme
 function updateUI() {
-    document.getElementById('scoreDisplay').textContent = gameState.score;
+    // Mesafe gösterimi (km veya m)
+    const distanceText = gameState.distance >= 1000 
+        ? `${(gameState.distance / 1000).toFixed(2)} km`
+        : `${Math.floor(gameState.distance)} m`;
+    document.getElementById('kmDisplay').textContent = distanceText;
+    
     document.getElementById('goldDisplay').textContent = gameState.gold;
+    document.getElementById('silverDisplay').textContent = gameState.silver;
     document.getElementById('levelDisplay').textContent = gameState.level;
     document.getElementById('livesDisplay').textContent = gameState.lives;
     document.getElementById('mainGoldDisplay').textContent = gameState.totalGold;
+    document.getElementById('mainSilverDisplay').textContent = gameState.totalSilver;
     document.getElementById('galleryGoldDisplay').textContent = gameState.totalGold;
+    document.getElementById('gallerySilverDisplay').textContent = gameState.totalSilver;
+}
+
+// Oyun Başlangıç Ekranı Güncelleme
+function updateGameStartScreen() {
+    const carInfo = carTypes[settings.carType];
+    const seasonNames = {
+        spring: 'İlkbahar 🌸',
+        summer: 'Yaz ☀️',
+        autumn: 'Sonbahar 🍂',
+        winter: 'Kış ❄️'
+    };
+    const roadNames = {
+        highway: 'Otoyol',
+        city: 'Şehir Yolu',
+        country: 'Köy Yolu'
+    };
+    
+    document.getElementById('startCarName').textContent = carInfo ? carInfo.name : '-';
+    document.getElementById('startLives').textContent = gameState.lives;
+    document.getElementById('startSpeed').textContent = Math.floor(gameState.speed * 20); // km/h yaklaşık
+    document.getElementById('startSeason').textContent = seasonNames[settings.season] || '-';
+    document.getElementById('startRoadType').textContent = roadNames[settings.roadType] || '-';
 }
 
 // Oyun Döngüsü
@@ -813,8 +1126,17 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Menü Event Listener'ları
     document.getElementById('startBtn').addEventListener('click', () => {
+        updateGameStartScreen();
+        showScreen('gameStartScreen');
+    });
+
+    document.getElementById('startGameBtn').addEventListener('click', () => {
         showScreen('gameScreen');
         startGame();
+    });
+
+    document.getElementById('backFromStartBtn').addEventListener('click', () => {
+        showScreen('mainMenu');
     });
 
     document.getElementById('settingsBtn').addEventListener('click', () => {
@@ -957,7 +1279,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 }
 
-    // İlk ekran
-    showScreen('mainMenu');
+// İlk ekran
+showScreen('mainMenu');
     updateUI();
 });
